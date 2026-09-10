@@ -1,0 +1,108 @@
+name: Remove Watermark
+
+on:
+  workflow_dispatch:
+    inputs:
+      video_url:
+        description: 'URL video (GitHub/raw/direct link)'
+        required: true
+        type: string
+      method:
+        description: 'Metode hapus'
+        required: true
+        default: 'inpaint'
+        type: choice
+        options:
+          - inpaint
+          - inpaint_ns
+          - blur
+          - median
+      samples:
+        description: 'Sample frames untuk deteksi'
+        required: false
+        default: '50'
+        type: string
+
+  push:
+    paths:
+      - 'input/**'
+      - 'videos/**'
+
+jobs:
+  remove_watermark:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1
+        pip install opencv-python-headless numpy
+    
+    - name: Download video (dari URL)
+      if: github.event.inputs.video_url != ''
+      run: |
+        mkdir -p input
+        wget "${{ github.event.inputs.video_url }}" -O input/video.mp4
+        ls -la input/
+    
+    - name: List videos
+      run: |
+        echo "=== Videos available ==="
+        find input videos -type f \( -name "*.mp4" -o -name "*.avi" -o -name "*.mov" \) 2>/dev/null || echo "No videos found"
+    
+    - name: Remove watermark
+      run: |
+        METHOD="${{ github.event.inputs.method }}"
+        SAMPLES="${{ github.event.inputs.samples }}"
+        
+        if [ -z "$METHOD" ]; then METHOD="inpaint"; fi
+        if [ -z "$SAMPLES" ]; then SAMPLES="50"; fi
+        
+        mkdir -p output
+        
+        for video in input/*.mp4 videos/*.mp4; do
+          if [ -f "$video" ]; then
+            echo "Processing: $video"
+            python watermark_remover.py \
+              --input "$video" \
+              --output "output/$(basename "$video" .mp4)_no_wm.mp4" \
+              --method "$METHOD" \
+              --samples "$SAMPLES"
+          fi
+        done
+        
+        ls -la output/
+    
+    - name: Upload result
+      uses: actions/upload-artifact@v4
+      with:
+        name: video-no-watermark
+        path: |
+          output/*.mp4
+          input/preview.jpg
+        retention-days: 30
+        overwrite: true
+        if-no-files-found: warn
+    
+    - name: Create Release
+      if: success()
+      uses: softprops/action-gh-release@v2
+      with:
+        files: output/*.mp4
+        tag_name: v${{ github.run_number }}
+        name: Watermark Removed v${{ github.run_number }}
+        body: |
+          Video processed with watermark remover
+          - Method: ${{ github.event.inputs.method || 'inpaint' }}
+          - Samples: ${{ github.event.inputs.samples || '50' }}
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
