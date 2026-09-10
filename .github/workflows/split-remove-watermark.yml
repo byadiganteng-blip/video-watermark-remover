@@ -3,6 +3,10 @@ name: Split & Remove Watermark
 on:
   workflow_dispatch:
     inputs:
+      video_url:
+        description: 'URL video (GitHub release/raw)'
+        required: true
+        type: string
       part_duration:
         description: 'Durasi per part (detik)'
         required: false
@@ -18,68 +22,56 @@ on:
           - median
           - inpaint
 
-  push:
-    paths:
-      - 'input/*.mp4'
-      - 'input/*.avi'
-      - 'input/*.mov'
-
 jobs:
   process:
     runs-on: ubuntu-latest
     timeout-minutes: 180
-
+    
     permissions:
       contents: write
-
+    
     steps:
     - name: Checkout
       uses: actions/checkout@v4
-      with:
-        lfs: true
-
+    
     - name: Setup Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.11'
-
+    
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1
+        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 wget
         pip install opencv-python-headless numpy
-
-    - name: List input videos
+    
+    - name: Download video
       run: |
-        echo "=== Input videos ==="
-        ls -la input/ 2>/dev/null || echo "No input dir"
-
+        mkdir -p input
+        echo "Downloading: ${{ github.event.inputs.video_url }}"
+        wget --timeout=300 "${{ github.event.inputs.video_url }}" -O "input/video.mp4"
+        ls -lh input/video.mp4
+    
     - name: Split & Remove Watermark
       run: |
         mkdir -p output
-
+        
         PART_DURATION="${{ github.event.inputs.part_duration || '300' }}"
         METHOD="${{ github.event.inputs.method || 'blur' }}"
-
-        echo "Part duration: $PART_DURATION"
+        
+        echo "Part duration: $PART_DURATION seconds"
         echo "Method: $METHOD"
-
-        for video in input/*.mp4 input/*.avi input/*.mov; do
-          if [ -f "$video" ]; then
-            echo "Processing: $video"
-
-            python split_remove_watermark.py \
-              --input "$video" \
-              --output-dir output \
-              --part-duration "$PART_DURATION" \
-              --method "$METHOD" \
-              --samples 20 || echo "Failed: $video"
-          fi
-        done
-
-        echo "=== Output ==="
+        
+        python split_remove_watermark.py \
+          --input input/video.mp4 \
+          --output-dir output \
+          --part-duration "$PART_DURATION" \
+          --method "$METHOD" \
+          --samples 20
+        
+        echo "=== Output files ==="
         ls -la output/
-
+    
     - name: Upload result
       uses: actions/upload-artifact@v4
       if: always()
@@ -89,13 +81,13 @@ jobs:
         retention-days: 30
         overwrite: true
         if-no-files-found: warn
-
+    
     - name: Create Release
       if: success()
       uses: softprops/action-gh-release@v2
       with:
         files: output/*.mp4
-        tag_name: v${{ github.run_number }}
-        name: Split & Watermark Removed v${{ github.run_number }}
+        tag_name: parts-${{ github.run_number }}
+        name: Split Parts v${{ github.run_number }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
