@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       video_url:
-        description: 'URL video (GitHub release/raw)'
+        description: 'URL Video (YouTube, Facebook, TikTok, Instagram, atau direct)'
         required: true
         type: string
       part_duration:
-        description: 'Durasi per part (detik)'
+        description: 'Durasi per part (detik, default 300 = 5 menit)'
         required: false
         default: '300'
       method:
-        description: 'Metode'
+        description: 'Metode hapus watermark'
         required: false
         default: 'blur'
         type: choice
@@ -25,7 +25,7 @@ on:
 jobs:
   process:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     
     permissions:
       contents: write
@@ -42,15 +42,41 @@ jobs:
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 wget
-        pip install opencv-python-headless numpy
+        sudo apt-get install -y ffmpeg libsm6 libxext6 libgl1 wget curl
+        pip install opencv-python-headless numpy yt-dlp
+    
+    - name: Verify tools
+      run: |
+        echo "=== FFmpeg ==="
+        ffmpeg -version | head -1
+        echo ""
+        echo "=== yt-dlp ==="
+        yt-dlp --version
     
     - name: Download video
       run: |
         mkdir -p input
-        echo "Downloading: ${{ github.event.inputs.video_url }}"
-        wget --timeout=300 "${{ github.event.inputs.video_url }}" -O "input/video.mp4"
-        ls -lh input/video.mp4
+        
+        echo "=========================================="
+        echo "Downloading video..."
+        echo "URL: ${{ github.event.inputs.video_url }}"
+        echo "=========================================="
+        
+        python universal_downloader.py \
+          --url "${{ github.event.inputs.video_url }}" \
+          --output "input/video.mp4"
+        
+        echo ""
+        echo "=== Downloaded file ==="
+        ls -lh input/
+        
+        # Cek video info
+        if [ -f "input/video.mp4" ]; then
+          echo ""
+          echo "=== Video info ==="
+          ffprobe -v error -show_entries format=duration,size,format_name \
+            -of default=noprint_wrappers=1 input/video.mp4
+        fi
     
     - name: Split & Remove Watermark
       run: |
@@ -59,8 +85,11 @@ jobs:
         PART_DURATION="${{ github.event.inputs.part_duration || '300' }}"
         METHOD="${{ github.event.inputs.method || 'blur' }}"
         
+        echo "=========================================="
+        echo "Processing video..."
         echo "Part duration: $PART_DURATION seconds"
         echo "Method: $METHOD"
+        echo "=========================================="
         
         python split_remove_watermark.py \
           --input input/video.mp4 \
@@ -69,6 +98,7 @@ jobs:
           --method "$METHOD" \
           --samples 20
         
+        echo ""
         echo "=== Output files ==="
         ls -la output/
     
@@ -89,5 +119,10 @@ jobs:
         files: output/*.mp4
         tag_name: parts-${{ github.run_number }}
         name: Split Parts v${{ github.run_number }}
+        body: |
+          ✅ Video split & watermark removed
+          - Source: ${{ github.event.inputs.video_url }}
+          - Part duration: ${{ github.event.inputs.part_duration || '300' }}s
+          - Method: ${{ github.event.inputs.method || 'blur' }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
